@@ -46,9 +46,27 @@ class PictureCanvas {
 	}
 	syncState(picture) {
 		if (this.picture == picture) return;
-		this.picture = picture;
-		drawPicture(this.picture, this.dom, scale);
+		if (this.picture == undefined || 
+			this.picture.width != picture.width || 
+			this.picture.height != picture.height) {
+			this.picture = picture;
+			drawPicture(this.picture, this.dom, scale);
+		}
+		updatePicture(this.picture, picture, this.dom, scale);	
+		this.picture = picture;			
 	}
+}
+
+function updatePicture(picture, newPicture, canvas, scale) {
+		let cx = canvas.getContext("2d");
+		for (let y=0; y < picture.height; y++) {
+			for (let x=0; x < picture.width; x++) {
+				if (picture.pixel(x, y) != newPicture.pixel(x, y)) {
+					cx.fillStyle = newPicture.pixel(x, y);
+					cx.fillRect(x*scale, y*scale, scale, scale);						
+				}
+			}
+		}
 }
 
 function drawPicture(picture, canvas, scale) {
@@ -119,8 +137,14 @@ class PixelEditor {
 		});
 		this.controls = controls.map(
 			Control => new Control(state, config));
-		this.dom = elt("div", {}, this.canvas.dom, elt("br"), 
+		this.dom = elt("div", { tabIndex: 0 }, this.canvas.dom, elt("br"), 
 			...this.controls.reduce((a, c) => a.concat(" ", c.dom), []));
+		this.dom.addEventListener("keydown", event => {
+			if ((event.ctrlKey || event.metaKey) && event.key == "z") {
+				event.preventDefault();
+				config.dispatch({undo: true});
+			}
+		})
 	}
 	syncState(state) {
 		this.state = state;
@@ -153,10 +177,42 @@ class ColorSelect {
 	syncState(state) {this.input.value = state.color};
 }
 
+function lineDrawing(startX, startY, endX, endY) {
+	let coordsTable = [];
+	let maxX = Math.abs(endX - startX);
+	let maxY = Math.abs(endY - startY);
+	// console.log(maxX, maxY);
+	for (let x = 0; x <= maxX; x++) {
+		for (let y = 0; y <= maxY; y++) {
+			let newX = x;
+			let newY = y;
+			if (maxX >= maxY) {
+				newY = (maxX!=0) ? Math.round(maxY/maxX*y) : 0;
+			} else {
+				newX = (maxY!=0) ? Math.round(maxX/maxY*x) : 0;
+			}
+			// console.log(x, y, newX, newY);
+			if (endX >= startX) newX += startX;
+			else newX = startX - newX;
+			if (endY >= startY) newY += startY;
+			else newY = startY - newY;
+			// console.log(newX, newY);
+			coordsTable.push([newX, newY]);
+		}
+	}
+	return	coordsTable;
+}
+
 function draw(pos, state, dispatch) {
+	let oldPos = pos;
 	function drawPixel({x, y}, state) {
-		let drawn = {x, y, color: state.color};
-		dispatch({picture: state.picture.draw([drawn])});
+		let coords = lineDrawing(x, y, oldPos.x, oldPos.y);
+		let drawn = [];
+		for (coord of coords) {
+			drawn.push({x: coord[0], y: coord[1], color: state.color});
+		} 
+		dispatch({picture: state.picture.draw(drawn)});
+		oldPos = {x, y};
 	}
 	drawPixel(pos, state);
 	return drawPixel;
@@ -178,6 +234,30 @@ function rectangle(start, state, dispatch) {
 	}
 	drawRectangle(start);
 	return drawRectangle;
+}
+
+function circle(pos, state, dispatch) {
+	function drawCircle(actualPos) {
+		let drawn = [];	
+		function radius(startX, startY, endX, endY) {
+			return Math.round(Math.sqrt(Math.pow(startX - endX, 2) 
+				+ Math.pow(startY - endY, 2)));
+		}
+		let r = radius(pos.x, pos.y, actualPos.x, actualPos.y); 
+		let maxRy = Math.min(pos.y, state.picture.height - pos.y);
+		let maxRx = Math.min(pos.x, state.picture.width - pos.x - 1);
+		r = Math.min(r, maxRx, maxRy);
+		for (let y = pos.y-r; y<=pos.y+r; y++) {
+			for (let x=pos.x-r; x<=pos.x+r; x++) {
+				if (radius(pos.x, pos.y, x, y) <= r) {
+					drawn.push({x, y, color: state.color});
+				}
+			}
+		}
+		dispatch({picture: state.picture.draw(drawn)});
+	}
+	drawCircle(pos);
+	return drawCircle;
 }
 
 const around = [{dx: -1, dy: 0}, {dx: 1, dy: 0}, 
@@ -317,7 +397,7 @@ const startState = {
 	doneAt: 0
 };
 
-const baseTools = {draw, fill, rectangle, pick};
+const baseTools = {draw, fill, rectangle, pick, circle};
 
 const baseControls = [ToolSelect, ColorSelect, SaveButton, LoadButton, UndoButton];
 
